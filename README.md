@@ -1,9 +1,3 @@
-# -SKT-
-서버 점검 중 실패한 SKT 주문건 자동 재요청 시스템 구축
-
-서버 점검 중 실패한 USIM/eSIM 주문건을 수집하여,
-개별 처리 대신 일괄 재요청 방식으로 자동 복구하는 시스템을 개발하였습니다.
-
 ### **프로젝트 개요**
 
 SKT 측 서버 점검 시간 중 발생한 주문(API 실패 또는 이메일 미전송)을 자동 또는 수동으로 **일괄 재요청**하여 처리하는 시스템을 개발하였습니다.
@@ -109,13 +103,11 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // 타임존 설정
 date_default_timezone_set("Asia/Seoul");
 
-// 데이터베이스 연결 정보
-require "/var/www/html8443/mallapi/db_info.php";
-$db_conn = mysqli_connect($db_host, $db_user, $db_pwd, $db_category, $db_port);
-if (mysqli_connect_errno()) {
-    die("DB 연결 실패: " . mysqli_connect_error());
-}
+// 공통 함수
+require'/var/www/html/mobile_app/mgr/common.php';
 
+// 데이터베이스 연결
+$db_conn = get_db_connection();
 // 요청 파라미터 확인
 if (!$_REQUEST['retry_start_dt'] || !$_REQUEST['retry_end_dt']) {
     echo "<script>alert('날짜 파라미터가 필요합니다.'); window.history.back();</script>";
@@ -332,7 +324,7 @@ while ($row = mysqli_fetch_assoc($result)) {
 						VALUES ('$order_item_code','$product_code','$flag','$rental_schd_sta_dtm','$rental_schd_end_dtm','$rental_sale_org_id','$rtn_sale_org_id','$email','$rsv_rcv_dtm','$rental_booth_org_id','$passport','$buy_user_name','$rcmndr_id','$total_cnt','$mst_flag','$roming_typ_cd','$order_item_code','$rental_fee_prod_id')";
     // 쿼리 실행
     try {
-        mysqli_query($db_conn, $query); 
+        mysqli_query($db_conn, $query);
     } catch (mysqli_sql_exception $e) {
         log_write($order_item_code, $e->getMessage(),
             $api3_log_error_file_name, $api3_log_error_path);
@@ -351,7 +343,6 @@ while ($row = mysqli_fetch_assoc($result)) {
         $query = "INSERT INTO tb_pickup_order_item_sk (order_id, order_item_code, shop, product_name, product_day, quantity, pickup_date, buy_user_name, passport, pickup_place, note, api_state, send_api_time, return_api_time, ctn, buy_user_memo, order_ymd) 
 								VALUES ('$order_item_code','$order_item_code','$shop_no','$product_name','$product_day','$total_cnt','$rental_schd_sta_dtm','$buy_user_name','$order_item_code','$rental_sale_org_id','$note', '$api_state', '$apiDTS', '$apiDTR', '$ctn', '$note','$order_ymd')";
 
-        
         // 쿼리 실행 및 예외 처리
         try {
             mysqli_query($db_conn, $query);
@@ -394,7 +385,7 @@ mysqli_close($db_conn);
 //
 function return_data_save($db_conn, $resData, $order_item_code,
                           $failed,
-    $error_log_file_name, $error_log_path)
+                          $error_log_file_name, $error_log_path)
 {
     /* --- 1) OUT1 최소 필드 확보 여부 확인 --- */
     if (empty($resData['OUT1'][0]['TOTAL_CNT']) ||
@@ -451,56 +442,6 @@ function return_data_save($db_conn, $resData, $order_item_code,
     }
 }
 
-//// 로그 파일에 기록하는 함수
-function log_write($order_item_code, $log_data, $file_name, $log_dir)
-{
-    /* 1) 경로 안전 조합 */
-    $dir = rtrim($log_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-
-    /* 2) 디렉터리 생성(775/664) */
-    $oldUmask = umask(002);
-    if (!is_dir($dir)) {
-        if (!mkdir($dir, 0775, true)) {
-            umask($oldUmask);
-            throw new RuntimeException("로그 디렉터리 생성 실패: {$dir}");
-        }
-    }
-    umask($oldUmask);
-
-    /* 3) 로그 라인 생성 */
-    $time = date('c');                                   // ISO-8601
-    $sanitized = preg_replace('/[^A-Za-z0-9_\-]/', '', $order_item_code);
-
-    if (is_string($log_data)) {
-        $body = $log_data;
-    } else {
-        $body = json_encode($log_data, JSON_UNESCAPED_UNICODE);
-        if ($body === false) {
-            // PHP 5.3~5.4에 json_last_error_msg()가 없으므로 별도 처리
-            $jsonError = function_exists('json_last_error_msg')
-                ? json_last_error_msg()
-                : 'JSON encoding error';
-            throw new RuntimeException('JSON 인코딩 실패: ' . $jsonError);
-        }
-    }
-
-    $logTxt = "\n({$sanitized} {$time})\n{$body}\n\n";
-
-    /* 4) 파일 쓰기(append + lock) */
-    $path = $dir . $file_name;
-
-    // 10 MB 초과 시 간단 로테이션
-    if (is_file($path) && filesize($path) > 10 * 1024 * 1024) {
-        rename($path, $path . '.' . date('Ymd_His'));
-    }
-
-    // LOCK_EX 상수는 PHP 5.1 이상에서 지원
-    if (file_put_contents($path, $logTxt, FILE_APPEND | LOCK_EX) === false) {
-        throw new RuntimeException("로그 파일 쓰기 실패: {$path}");
-    }
-
-    return true;
-}
 // 모든 로직이 정상적으로 완료되었을 때 아래 코드 실행
 if ($failed) {
     $cnt   = count($failed);
@@ -532,11 +473,11 @@ error_reporting(E_ALL);
 date_default_timezone_set("Asia/Seoul");
 
 // 데이터베이스 연결 설정
-require "/var/www/html8443/mallapi/db_info.php";
-$db_conn = mysqli_connect($db_host, $db_user, $db_pwd, $db_category, $db_port);
-if (mysqli_connect_errno()) {
-    die("DB 연결 실패: " . mysqli_connect_error());
-}
+// 공통 함수
+require'/var/www/html/mobile_app/mgr/common.php';
+
+// 데이터베이스 연결
+$db_conn = get_db_connection();
 
 // 필요한 라이브러리 포함
 include_once "/var/www/html/mobile_app/mgr/phpbarcode/src/BarcodeGeneratorPNG.php";
@@ -897,55 +838,6 @@ while ($row = mysqli_fetch_assoc($rs)) {
 // 데이터베이스 연결 종료
 mysqli_close($db_conn);
 
-function log_write($order_item_code, $log_data, $file_name, $log_dir)
-{
-    /* 1) 경로 안전 조합 */
-    $dir = rtrim($log_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-
-    /* 2) 디렉터리 생성(775/664) */
-    $oldUmask = umask(002);
-    if (!is_dir($dir)) {
-        if (!mkdir($dir, 0775, true)) {
-            umask($oldUmask);
-            throw new RuntimeException("로그 디렉터리 생성 실패: {$dir}");
-        }
-    }
-    umask($oldUmask);
-
-    /* 3) 로그 라인 생성 */
-    $time = date('c');                                   // ISO-8601
-    $sanitized = preg_replace('/[^A-Za-z0-9_\-]/', '', $order_item_code);
-
-    if (is_string($log_data)) {
-        $body = $log_data;
-    } else {
-        $body = json_encode($log_data, JSON_UNESCAPED_UNICODE);
-        if ($body === false) {
-            // PHP 5.3~5.4에 json_last_error_msg()가 없으므로 별도 처리
-            $jsonError = function_exists('json_last_error_msg')
-                ? json_last_error_msg()
-                : 'JSON encoding error';
-            throw new RuntimeException('JSON 인코딩 실패: ' . $jsonError);
-        }
-    }
-
-    $logTxt = "\n({$sanitized} {$time})\n{$body}\n\n";
-
-    /* 4) 파일 쓰기(append + lock) */
-    $path = $dir . $file_name;
-
-    // 10 MB 초과 시 간단 로테이션
-    if (is_file($path) && filesize($path) > 10 * 1024 * 1024) {
-        rename($path, $path . '.' . date('Ymd_His'));
-    }
-
-    // LOCK_EX 상수는 PHP 5.1 이상에서 지원
-    if (file_put_contents($path, $logTxt, FILE_APPEND | LOCK_EX) === false) {
-        throw new RuntimeException("로그 파일 쓰기 실패: {$path}");
-    }
-
-    return true;
-}
 // 모든 로직이 정상적으로 완료되었을 때 아래 코드 실행
 if ($failed) {
     $cnt = count($failed);
@@ -961,5 +853,48 @@ if ($failed) {
     </script>";
 }
 exit;
+?>
+```
+
+공통 파일
+
+```php
+<?php
+function get_db_connection() {
+    require "/var/www/html8443/mallapi/db_info.php";
+    $db_conn = mysqli_connect($db_host, $db_user, $db_pwd, $db_category, $db_port);
+    if (mysqli_connect_errno()) {
+        die("DB 연결 실패: " . mysqli_connect_error());
+    }
+    return $db_conn;
+}
+
+function log_write($order_item_code, $log_data, $file_name, $log_dir) {
+    $dir = rtrim($log_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    $oldUmask = umask(002);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true)) {
+        umask($oldUmask);
+        throw new RuntimeException("로그 디렉터리 생성 실패: {$dir}");
+    }
+    umask($oldUmask);
+
+    $time = date('c');
+    $sanitized = preg_replace('/[^A-Za-z0-9_\-]/', '', $order_item_code);
+    $body = is_string($log_data) ? $log_data : json_encode($log_data, JSON_UNESCAPED_UNICODE);
+    if ($body === false) {
+        $jsonError = function_exists('json_last_error_msg') ? json_last_error_msg() : 'JSON encoding error';
+        throw new RuntimeException('JSON 인코딩 실패: ' . $jsonError);
+    }
+
+    $logTxt = "\n({$sanitized} {$time})\n{$body}\n\n";
+    $path = $dir . $file_name;
+    if (is_file($path) && filesize($path) > 10 * 1024 * 1024) {
+        rename($path, $path . '.' . date('Ymd_His'));
+    }
+    if (file_put_contents($path, $logTxt, FILE_APPEND | LOCK_EX) === false) {
+        throw new RuntimeException("로그 파일 쓰기 실패: {$path}");
+    }
+    return true;
+}
 ?>
 ```
