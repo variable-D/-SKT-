@@ -8,11 +8,12 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // 타임존 설정
 date_default_timezone_set("Asia/Seoul");
 
-// 공통 함수
-require __DIR__ . '/common.php';
-
-// 데이터베이스 연결
-$db_conn = get_db_connection();
+// 데이터베이스 연결 정보
+require "/var/www/html8443/mallapi/db_info.php";
+$db_conn = mysqli_connect($db_host, $db_user, $db_pwd, $db_category, $db_port);
+if (mysqli_connect_errno()) {
+    die("DB 연결 실패: " . mysqli_connect_error());
+}
 
 // 요청 파라미터 확인
 if (!$_REQUEST['retry_start_dt'] || !$_REQUEST['retry_end_dt']) {
@@ -359,6 +360,56 @@ function return_data_save($db_conn, $resData, $order_item_code,
 }
 
 
+//// 로그 파일에 기록하는 함수
+function log_write($order_item_code, $log_data, $file_name, $log_dir)
+{
+    /* 1) 경로 안전 조합 */
+    $dir = rtrim($log_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+
+    /* 2) 디렉터리 생성(775/664) */
+    $oldUmask = umask(002);
+    if (!is_dir($dir)) {
+        if (!mkdir($dir, 0775, true)) {
+            umask($oldUmask);
+            throw new RuntimeException("로그 디렉터리 생성 실패: {$dir}");
+        }
+    }
+    umask($oldUmask);
+
+    /* 3) 로그 라인 생성 */
+    $time = date('c');                                   // ISO-8601
+    $sanitized = preg_replace('/[^A-Za-z0-9_\-]/', '', $order_item_code);
+
+    if (is_string($log_data)) {
+        $body = $log_data;
+    } else {
+        $body = json_encode($log_data, JSON_UNESCAPED_UNICODE);
+        if ($body === false) {
+            // PHP 5.3~5.4에 json_last_error_msg()가 없으므로 별도 처리
+            $jsonError = function_exists('json_last_error_msg')
+                ? json_last_error_msg()
+                : 'JSON encoding error';
+            throw new RuntimeException('JSON 인코딩 실패: ' . $jsonError);
+        }
+    }
+
+    $logTxt = "\n({$sanitized} {$time})\n{$body}\n\n";
+
+    /* 4) 파일 쓰기(append + lock) */
+    $path = $dir . $file_name;
+
+    // 10 MB 초과 시 간단 로테이션
+    if (is_file($path) && filesize($path) > 10 * 1024 * 1024) {
+        rename($path, $path . '.' . date('Ymd_His'));
+    }
+
+    // LOCK_EX 상수는 PHP 5.1 이상에서 지원
+    if (file_put_contents($path, $logTxt, FILE_APPEND | LOCK_EX) === false) {
+        throw new RuntimeException("로그 파일 쓰기 실패: {$path}");
+    }
+
+    return true;
+}
 // 모든 로직이 정상적으로 완료되었을 때 아래 코드 실행
 if ($failed) {
     $cnt   = count($failed);
